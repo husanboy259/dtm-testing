@@ -18,26 +18,6 @@ http.createServer((req, res) => {
   console.log(`HTTP server 0.0.0.0:${PORT} da ishlamoqda`);
 });
 
-// ── Default built-in test ────────────────────────────────────────────────────
-const DEFAULT_TEST = {
-  name: 'DTM Test (Asosiy)',
-  type: 'local',
-  totalQ: 30,
-  photos: [
-    { file: 'photos/q1_9.jpg',   caption: 'Savollar 1-9' },
-    { file: 'photos/q10_18.jpg', caption: 'Savollar 10-18' },
-    { file: 'photos/q19_28.jpg', caption: 'Savollar 19-28' },
-    { file: 'photos/q29_30.jpg', caption: 'Savollar 29-30' },
-  ],
-  answers: {
-    1: 'A', 2: 'C', 3: 'C', 4: 'A', 5: 'C',
-    6: 'B', 7: 'C', 8: 'D', 9: 'A', 10: 'A',
-    11: 'C', 12: 'C', 13: 'C', 14: 'B', 15: 'C',
-    16: 'D', 17: 'C', 18: 'B', 19: 'C', 20: 'D',
-    21: 'A', 22: 'B', 23: 'C', 24: 'C', 25: 'B',
-    26: 'A', 27: 'A', 28: 'A', 29: 'C', 30: 'B',
-  },
-};
 
 // ── Persistence ──────────────────────────────────────────────────────────────
 function loadUsers() {
@@ -94,10 +74,7 @@ function answerKeyboard(qNum) {
 
 function testListKeyboard() {
   const tests = loadTests();
-  const rows = [
-    [{ text: `📋 ${DEFAULT_TEST.name}`, callback_data: 'test___default' }],
-    ...Object.keys(tests).map(name => [{ text: `📋 ${name}`, callback_data: `test___${name}` }]),
-  ];
+  const rows = Object.keys(tests).map(name => [{ text: `📋 ${name}`, callback_data: `test___${name}` }]);
   return { inline_keyboard: rows };
 }
 
@@ -301,16 +278,17 @@ bot.onText(/^Tests 📝$/, async (msg) => {
     return;
   }
 
-  const extraTests = loadTests();
+  const tests = loadTests();
   sessions.set(userId, { answers: {}, currentQ: 0, testStarted: false, testConfig: null });
 
-  if (Object.keys(extraTests).length === 0) {
-    await startTestSession(msg.chat.id, userId, DEFAULT_TEST);
-  } else {
-    await bot.sendMessage(msg.chat.id, '📚 Qaysi testni boshlash istaysiz?', {
-      reply_markup: testListKeyboard(),
-    });
+  if (Object.keys(tests).length === 0) {
+    await bot.sendMessage(msg.chat.id, "⚠️ Hozircha hech qanday test yo'q. Admin tez orada qo'shadi!");
+    return;
   }
+
+  await bot.sendMessage(msg.chat.id, '📚 Qaysi testni boshlash istaysiz?', {
+    reply_markup: testListKeyboard(),
+  });
 });
 
 // ── "📢 Kanal" button ─────────────────────────────────────────────────────────
@@ -334,16 +312,11 @@ bot.on('callback_query', async (query) => {
     const testName = query.data.replace('test___', '');
     await bot.answerCallbackQuery(query.id);
 
-    let testConfig;
-    if (testName === 'default') {
-      testConfig = DEFAULT_TEST;
-    } else {
-      const tests = loadTests();
-      testConfig = tests[testName];
-      if (!testConfig) {
-        await bot.sendMessage(chatId, '❌ Test topilmadi.');
-        return;
-      }
+    const tests = loadTests();
+    const testConfig = tests[testName];
+    if (!testConfig) {
+      await bot.sendMessage(chatId, '❌ Test topilmadi.');
+      return;
     }
 
     try { await bot.editMessageReplyMarkup({}, { chat_id: chatId, message_id: msgId }); } catch (_) {}
