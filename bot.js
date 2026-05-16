@@ -5,7 +5,7 @@ const http = require('http');
 
 const TOKEN      = '8960151863:AAEZikIcNIt4Fn1Jqnik7KtAUN7gPM1wYMQ';
 const CHANNEL_URL = 'https://t.me/MatematikaMilliySertifikat26';
-const ADMIN_ID   = process.env.ADMIN_ID ? parseInt(process.env.ADMIN_ID) : null;
+const ADMIN_ID   = 7396525906;
 const USERS_FILE = 'users.json';
 const TESTS_FILE = 'tests.json';
 const PORT       = process.env.PORT || 3000;
@@ -180,14 +180,6 @@ bot.onText(/\/myid/, (msg) => {
 
 // ── /addtest <name> ───────────────────────────────────────────────────────────
 bot.onText(/\/addtest (.+)/, async (msg, match) => {
-  if (!ADMIN_ID) {
-    await bot.sendMessage(msg.chat.id,
-      "⚠️ ADMIN_ID o'rnatilmagan.\n\n" +
-      "1. /myid buyrug'i bilan ID ingizni oling\n" +
-      "2. Render → Environment → ADMIN_ID = IDingiz"
-    );
-    return;
-  }
   if (msg.from.id !== ADMIN_ID) {
     await bot.sendMessage(msg.chat.id, '⛔ Siz admin emassiz.');
     return;
