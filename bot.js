@@ -306,7 +306,7 @@ function getSession(userId) {
 // ── Keyboards ─────────────────────────────────────────────────────────────────
 function mainKeyboard() {
   return {
-    keyboard: [[{ text: 'Tests 📝' }]],
+    keyboard: [[{ text: 'Tests 📝' }, { text: '📢 Kanal' }]],
     resize_keyboard: true,
     persistent: true,
   };
@@ -378,6 +378,17 @@ bot.onText(/\/start/, async (msg) => {
 
   await bot.sendMessage(chatId, "Salom! Testni boshlash uchun quyidagi tugmani bosing 👇", {
     reply_markup: mainKeyboard(),
+  });
+});
+
+// ── "📢 Kanal" button ─────────────────────────────────────────────────────────
+bot.onText(/^📢 Kanal$/, async (msg) => {
+  await bot.sendMessage(msg.chat.id, '📢 Bizning kanalimiz:', {
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '➡️ Kanalga o\'tish', url: CHANNEL_URL },
+      ]],
+    },
   });
 });
 
