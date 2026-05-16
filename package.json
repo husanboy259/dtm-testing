@@ -7,6 +7,7 @@
     "start": "node bot.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.4",
     "node-cron": "^4.2.1",
     "node-telegram-bot-api": "^0.64.0"
   }

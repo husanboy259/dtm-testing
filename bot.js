@@ -1,16 +1,19 @@
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
-const fs = require('fs');
 const http = require('http');
+const { createClient } = require('@supabase/supabase-js');
 
-const TOKEN      = '8960151863:AAEZikIcNIt4Fn1Jqnik7KtAUN7gPM1wYMQ';
+const TOKEN       = '8960151863:AAEZikIcNIt4Fn1Jqnik7KtAUN7gPM1wYMQ';
 const CHANNEL_URL = 'https://t.me/MatematikaMilliySertifikat26';
-const ADMIN_ID   = 7396525906;
-const USERS_FILE = 'users.json';
-const TESTS_FILE = 'tests.json';
-const PORT       = process.env.PORT || 3000;
+const ADMIN_ID    = 7396525906;
+const PORT        = process.env.PORT || 3000;
 
-// Render requires an HTTP server to keep the service alive
+const SUPABASE_URL = 'https://nmggpreomednuxvplzmn.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5tZ2dwcmVvbWVkbnV4dnBsem1uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDM4ODIsImV4cCI6MjA5NDUxOTg4Mn0.1yNBxMyv2gZVBRvXY7drmYF8w_XxnsjYu-KbWmvpX_Y';
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ── HTTP server (keeps Render alive) ─────────────────────────────────────────
 http.createServer((req, res) => {
   res.writeHead(200);
   res.end('Bot ishlayapti!');
@@ -18,32 +21,83 @@ http.createServer((req, res) => {
   console.log(`HTTP server 0.0.0.0:${PORT} da ishlamoqda`);
 });
 
-
-// ── Persistence ──────────────────────────────────────────────────────────────
-function loadUsers() {
-  try { return new Set(JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'))); }
-  catch (_) { return new Set(); }
-}
-function saveUsers() {
-  fs.writeFileSync(USERS_FILE, JSON.stringify([...users]));
-}
-const users = loadUsers();
-
-function loadTests() {
-  try { return JSON.parse(fs.readFileSync(TESTS_FILE, 'utf8')); }
-  catch (_) { return {}; }
-}
-function saveTests(tests) {
-  fs.writeFileSync(TESTS_FILE, JSON.stringify(tests, null, 2));
+// ── Supabase helpers ──────────────────────────────────────────────────────────
+async function addUser(userId) {
+  await supabase.from('users').upsert({ id: userId }, { onConflict: 'id' });
 }
 
-// ── Bot & sessions ───────────────────────────────────────────────────────────
+async function getAllUsers() {
+  const { data } = await supabase.from('users').select('id');
+  return (data || []).map(r => r.id);
+}
+
+async function loadTests() {
+  const { data: tests } = await supabase.from('tests').select('*');
+  if (!tests || tests.length === 0) return {};
+
+  const result = {};
+  for (const test of tests) {
+    const { data: photos } = await supabase
+      .from('photos')
+      .select('file_id, caption, position')
+      .eq('test_id', test.id)
+      .order('position');
+
+    const { data: answers } = await supabase
+      .from('answers')
+      .select('question_no, answer')
+      .eq('test_id', test.id);
+
+    const answersMap = {};
+    (answers || []).forEach(r => { answersMap[r.question_no] = r.answer; });
+
+    result[test.name] = {
+      id:      test.id,
+      name:    test.name,
+      totalQ:  test.total_q,
+      type:    test.type,
+      photos:  (photos || []).map(p => p.file_id),
+      answers: answersMap,
+    };
+  }
+  return result;
+}
+
+async function saveTest(testName, photoFileIds, answersArr) {
+  // Insert test row
+  const { data: testRow, error } = await supabase
+    .from('tests')
+    .insert({ name: testName, total_q: answersArr.length, type: 'remote' })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  // Insert photos
+  const photoRows = photoFileIds.map((file_id, i) => ({
+    test_id: testRow.id, file_id, caption: null, position: i + 1,
+  }));
+  await supabase.from('photos').insert(photoRows);
+
+  // Insert answers
+  const answerRows = answersArr.map((answer, i) => ({
+    test_id: testRow.id, question_no: i + 1, answer,
+  }));
+  await supabase.from('answers').insert(answerRows);
+}
+
+async function deleteTest(testName) {
+  const { data } = await supabase.from('tests').select('id').eq('name', testName).single();
+  if (!data) return false;
+  await supabase.from('tests').delete().eq('id', data.id);
+  return true;
+}
+
+// ── Bot & sessions ────────────────────────────────────────────────────────────
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// userId -> { answers, currentQ, testStarted, testConfig }
-const sessions = new Map();
-// adminId -> { phase: 'photos'|'answers', testName, photos: [] }
-const adminSessions = new Map();
+const sessions      = new Map(); // userId -> { answers, currentQ, testStarted, testConfig }
+const adminSessions = new Map(); // adminId -> { phase, testName, photos }
 
 function getSession(userId) {
   if (!sessions.has(userId)) {
@@ -52,7 +106,7 @@ function getSession(userId) {
   return sessions.get(userId);
 }
 
-// ── Keyboards ────────────────────────────────────────────────────────────────
+// ── Keyboards ─────────────────────────────────────────────────────────────────
 function mainKeyboard() {
   return {
     keyboard: [[{ text: 'Tests 📝' }, { text: '📢 Kanal' }]],
@@ -72,13 +126,13 @@ function answerKeyboard(qNum) {
   };
 }
 
-function testListKeyboard() {
-  const tests = loadTests();
+async function testListKeyboard() {
+  const tests = await loadTests();
   const rows = Object.keys(tests).map(name => [{ text: `📋 ${name}`, callback_data: `test___${name}` }]);
   return { inline_keyboard: rows };
 }
 
-// ── Core helpers ─────────────────────────────────────────────────────────────
+// ── Core helpers ──────────────────────────────────────────────────────────────
 async function sendQuestion(chatId, qNum) {
   await bot.sendMessage(chatId, `❓ ${qNum}-savol uchun javob tanlang:`, {
     reply_markup: answerKeyboard(qNum),
@@ -87,8 +141,8 @@ async function sendQuestion(chatId, qNum) {
 
 async function startTestSession(chatId, userId, testConfig) {
   const session = getSession(userId);
-  session.answers    = {};
-  session.currentQ   = 1;
+  session.answers     = {};
+  session.currentQ    = 1;
   session.testStarted = true;
   session.testConfig  = testConfig;
 
@@ -96,16 +150,8 @@ async function startTestSession(chatId, userId, testConfig) {
     reply_markup: mainKeyboard(),
   });
 
-  if (testConfig.type === 'local') {
-    for (const { file, caption } of testConfig.photos) {
-      if (fs.existsSync(file)) {
-        await bot.sendPhoto(chatId, fs.createReadStream(file), { caption });
-      }
-    }
-  } else {
-    for (const fileId of testConfig.photos) {
-      await bot.sendPhoto(chatId, fileId);
-    }
+  for (const fileId of testConfig.photos) {
+    await bot.sendPhoto(chatId, fileId);
   }
 
   await bot.sendMessage(
@@ -140,22 +186,19 @@ async function showResults(chatId, session) {
   await bot.sendMessage(chatId, lines.join('\n'), { reply_markup: mainKeyboard() });
 }
 
-// ── /start ───────────────────────────────────────────────────────────────────
+// ── /start ────────────────────────────────────────────────────────────────────
 bot.onText(/\/start/, async (msg) => {
   const userId = msg.from.id;
-  users.add(userId);
-  saveUsers();
+  await addUser(userId);
   sessions.set(userId, { answers: {}, currentQ: 0, testStarted: false, testConfig: null });
   await bot.sendMessage(msg.chat.id, "Salom! Testni boshlash uchun quyidagi tugmani bosing 👇", {
     reply_markup: mainKeyboard(),
   });
 });
 
-// ── /myid — show Telegram ID (needed to set ADMIN_ID) ────────────────────────
+// ── /myid ─────────────────────────────────────────────────────────────────────
 bot.onText(/\/myid/, (msg) => {
-  bot.sendMessage(msg.chat.id, `🆔 Sizning Telegram ID: \`${msg.from.id}\``, {
-    parse_mode: 'Markdown',
-  });
+  bot.sendMessage(msg.chat.id, `🆔 Sizning Telegram ID: \`${msg.from.id}\``, { parse_mode: 'Markdown' });
 });
 
 // ── /addtest <name> ───────────────────────────────────────────────────────────
@@ -164,17 +207,14 @@ bot.onText(/\/addtest (.+)/, async (msg, match) => {
     await bot.sendMessage(msg.chat.id, '⛔ Siz admin emassiz.');
     return;
   }
-
   const name = match[1].trim();
   adminSessions.set(msg.from.id, { phase: 'photos', testName: name, photos: [] });
   await bot.sendMessage(msg.chat.id,
-    `✅ "${name}" testi yaratilmoqda.\n\n` +
-    `📷 Rasmlarni ketma-ket yuboring.\n` +
-    `Tugagach /done yozing.`
+    `✅ "${name}" testi yaratilmoqda.\n\n📷 Rasmlarni ketma-ket yuboring.\nTugagach /done yozing.`
   );
 });
 
-// ── /done — finish photo phase, request answers ───────────────────────────────
+// ── /done ─────────────────────────────────────────────────────────────────────
 bot.onText(/\/done/, async (msg) => {
   const adminSess = adminSessions.get(msg.from.id);
   if (!adminSess || adminSess.phase !== 'photos') return;
@@ -184,40 +224,34 @@ bot.onText(/\/done/, async (msg) => {
   }
   adminSess.phase = 'answers';
   await bot.sendMessage(msg.chat.id,
-    `✅ ${adminSess.photos.length} ta rasm saqlandi.\n\n` +
-    `Endi javoblarni yuboring (probel bilan ajrating):\n` +
-    `Misol: A B C D A B C D A B`
+    `✅ ${adminSess.photos.length} ta rasm saqlandi.\n\nEndi javoblarni yuboring (probel bilan ajrating):\nMisol: A B C D A B C D A B`
   );
 });
 
-// ── /deltests <name> — delete a test ────────────────────────────────────────
+// ── /deltests <name> ──────────────────────────────────────────────────────────
 bot.onText(/\/deltests (.+)/, async (msg, match) => {
-  if (!ADMIN_ID || msg.from.id !== ADMIN_ID) return;
+  if (msg.from.id !== ADMIN_ID) return;
   const name = match[1].trim();
-  const tests = loadTests();
-  if (!tests[name]) {
-    await bot.sendMessage(msg.chat.id, `❌ "${name}" nomli test topilmadi.`);
-    return;
-  }
-  delete tests[name];
-  saveTests(tests);
-  await bot.sendMessage(msg.chat.id, `✅ "${name}" testi o'chirildi.`);
+  const deleted = await deleteTest(name);
+  await bot.sendMessage(msg.chat.id,
+    deleted ? `✅ "${name}" testi o'chirildi.` : `❌ "${name}" nomli test topilmadi.`
+  );
 });
 
-// ── /listtests — list all tests ───────────────────────────────────────────────
+// ── /listtests ────────────────────────────────────────────────────────────────
 bot.onText(/\/listtests/, async (msg) => {
-  if (!ADMIN_ID || msg.from.id !== ADMIN_ID) return;
-  const tests = loadTests();
+  if (msg.from.id !== ADMIN_ID) return;
+  const tests = await loadTests();
   const names = Object.keys(tests);
   if (names.length === 0) {
-    await bot.sendMessage(msg.chat.id, "📋 Qo'shimcha testlar yo'q.");
+    await bot.sendMessage(msg.chat.id, "📋 Hech qanday test yo'q.");
     return;
   }
   const list = names.map((n, i) => `${i + 1}. ${n} (${tests[n].totalQ} savol)`).join('\n');
   await bot.sendMessage(msg.chat.id, `📋 Testlar:\n\n${list}`);
 });
 
-// ── Photo messages (admin adding photos) ─────────────────────────────────────
+// ── Admin: receive photos ─────────────────────────────────────────────────────
 bot.on('photo', async (msg) => {
   const adminSess = adminSessions.get(msg.from.id);
   if (!adminSess || adminSess.phase !== 'photos') return;
@@ -228,7 +262,7 @@ bot.on('photo', async (msg) => {
   );
 });
 
-// ── Text messages (admin answers entry) ──────────────────────────────────────
+// ── Admin: receive answers / user messages ────────────────────────────────────
 bot.on('message', async (msg) => {
   if (!msg.text) return;
   const adminSess = adminSessions.get(msg.from.id);
@@ -244,33 +278,21 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  const answers = {};
-  parts.forEach((ans, i) => { answers[i + 1] = ans; });
-
-  const tests = loadTests();
-  tests[adminSess.testName] = {
-    name: adminSess.testName,
-    type: 'remote',
-    photos: adminSess.photos,
-    answers,
-    totalQ: parts.length,
-  };
-  saveTests(tests);
-
-  const { testName, photos } = adminSess;
+  try {
+    await saveTest(adminSess.testName, adminSess.photos, parts);
+    await bot.sendMessage(msg.chat.id,
+      `✅ "${adminSess.testName}" testi Supabase ga saqlandi!\n📊 ${parts.length} ta savol | 📷 ${adminSess.photos.length} ta rasm`
+    );
+  } catch (err) {
+    await bot.sendMessage(msg.chat.id, `❌ Xatolik: ${err.message}`);
+  }
   adminSessions.delete(msg.from.id);
-
-  await bot.sendMessage(msg.chat.id,
-    `✅ "${testName}" testi saqlandi!\n` +
-    `📊 ${parts.length} ta savol | 📷 ${photos.length} ta rasm`
-  );
 });
 
 // ── "Tests 📝" button ─────────────────────────────────────────────────────────
 bot.onText(/^Tests 📝$/, async (msg) => {
   const userId = msg.from.id;
-  users.add(userId);
-  saveUsers();
+  await addUser(userId);
 
   const session = getSession(userId);
   if (session.testStarted) {
@@ -278,7 +300,7 @@ bot.onText(/^Tests 📝$/, async (msg) => {
     return;
   }
 
-  const tests = loadTests();
+  const tests = await loadTests();
   sessions.set(userId, { answers: {}, currentQ: 0, testStarted: false, testConfig: null });
 
   if (Object.keys(tests).length === 0) {
@@ -287,7 +309,7 @@ bot.onText(/^Tests 📝$/, async (msg) => {
   }
 
   await bot.sendMessage(msg.chat.id, '📚 Qaysi testni boshlash istaysiz?', {
-    reply_markup: testListKeyboard(),
+    reply_markup: await testListKeyboard(),
   });
 });
 
@@ -302,30 +324,26 @@ bot.onText(/^📢 Kanal$/, async (msg) => {
 
 // ── Callback queries ──────────────────────────────────────────────────────────
 bot.on('callback_query', async (query) => {
-  const userId = query.from.id;
-  const chatId = query.message.chat.id;
-  const msgId  = query.message.message_id;
+  const userId  = query.from.id;
+  const chatId  = query.message.chat.id;
+  const msgId   = query.message.message_id;
   const session = getSession(userId);
 
-  // Test selection from list
   if (query.data.startsWith('test___')) {
     const testName = query.data.replace('test___', '');
     await bot.answerCallbackQuery(query.id);
-
-    const tests = loadTests();
+    const tests = await loadTests();
     const testConfig = tests[testName];
     if (!testConfig) {
       await bot.sendMessage(chatId, '❌ Test topilmadi.');
       return;
     }
-
     try { await bot.editMessageReplyMarkup({}, { chat_id: chatId, message_id: msgId }); } catch (_) {}
     sessions.set(userId, { answers: {}, currentQ: 0, testStarted: false, testConfig: null });
     await startTestSession(chatId, userId, testConfig);
     return;
   }
 
-  // Answer buttons
   if (query.data.startsWith('ans_')) {
     const [, qStr, answer] = query.data.split('_');
     const qNum = parseInt(qStr, 10);
@@ -337,7 +355,6 @@ bot.on('callback_query', async (query) => {
       });
       return;
     }
-
     if (qNum !== session.currentQ) {
       await bot.answerCallbackQuery(query.id, {
         text: 'Bu savol allaqachon javob berilgan!',
@@ -347,7 +364,6 @@ bot.on('callback_query', async (query) => {
     }
 
     await bot.answerCallbackQuery(query.id);
-
     session.answers[qNum] = answer;
     session.currentQ = qNum + 1;
 
@@ -371,7 +387,8 @@ bot.on('callback_query', async (query) => {
 // ── Daily 08:00 Uzbekistan time (UTC+5 → 03:00 UTC) ──────────────────────────
 cron.schedule('0 3 * * *', async () => {
   console.log(`[${new Date().toISOString()}] Kunlik xabar yuborilmoqda...`);
-  for (const userId of users) {
+  const userIds = await getAllUsers();
+  for (const userId of userIds) {
     try {
       await bot.sendMessage(userId, `📢 Telegram kanalimizga obuna bo'ling!\n\n${CHANNEL_URL}`);
     } catch (err) {
