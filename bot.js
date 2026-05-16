@@ -1,6 +1,13 @@
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 const fs = require('fs');
+const http = require('http');
+
+// Render requires an HTTP server to keep the service alive
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => res.end('Bot ishlayapti!')).listen(PORT, () => {
+  console.log(`HTTP server port ${PORT} da ishlamoqda`);
+});
 
 const TOKEN = '8960151863:AAEZikIcNIt4Fn1Jqnik7KtAUN7gPM1wYMQ';
 const CHANNEL_URL = 'https://t.me/MatematikaMilliySertifikat26';
