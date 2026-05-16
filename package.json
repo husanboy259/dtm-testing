@@ -1,0 +1,13 @@
+{
+  "name": "dtm-test-bot",
+  "version": "1.0.0",
+  "description": "DTM Test Telegram Bot (Uzbek)",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "node-cron": "^4.2.1",
+    "node-telegram-bot-api": "^0.64.0"
+  }
+}
