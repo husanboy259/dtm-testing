@@ -11,8 +11,11 @@ const TESTS_FILE = 'tests.json';
 const PORT       = process.env.PORT || 3000;
 
 // Render requires an HTTP server to keep the service alive
-http.createServer((req, res) => res.end('Bot ishlayapti!')).listen(PORT, () => {
-  console.log(`HTTP server port ${PORT} da ishlamoqda`);
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('Bot ishlayapti!');
+}).listen(PORT, '0.0.0.0', () => {
+  console.log(`HTTP server 0.0.0.0:${PORT} da ishlamoqda`);
 });
 
 // ── Default built-in test ────────────────────────────────────────────────────
